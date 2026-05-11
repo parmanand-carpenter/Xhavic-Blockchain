@@ -1,0 +1,285 @@
+services:
+  # ============================================================
+  # op-geth: L2 execution engine
+  # Public ports: 8545 (HTTP RPC), 8546 (WebSocket RPC)
+  # Engine API (8551) is NOT published — internal Docker network only
+  # ============================================================
+  op-geth:
+    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-geth:v1.101604.0
+    container_name: op-geth
+    restart: unless-stopped
+    networks:
+      - l2-internal
+    volumes:
+      - ./sequencer:/workspace
+      - op_geth_data:/workspace/op-geth-data
+    working_dir: /workspace
+    env_file:
+      - .env
+    ports:
+      - "8545:8545"   # Public HTTP JSON-RPC
+      - "8546:8546"   # Public WebSocket RPC
+      # Port 8551 (Engine API) intentionally NOT published — op-node reaches it internally
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ ! -d /workspace/op-geth-data/geth/chaindata ]; then
+          echo "Initializing geth datadir..."
+          geth init --datadir=/workspace/op-geth-data --state.scheme=hash /workspace/genesis.json
+        fi
+        echo "Starting geth..."
+        exec geth \
+          --datadir=/workspace/op-geth-data \
+          --http \
+          --http.addr=0.0.0.0 \
+          --http.port=8545 \
+          --http.vhosts=${HTTP_VHOSTS:-*} \
+          --http.corsdomain=${RPC_CORS_DOMAIN:-*} \
+          --http.api=eth,net,web3,txpool,miner \
+          --ws \
+          --ws.addr=0.0.0.0 \
+          --ws.port=8546 \
+          --ws.origins=${RPC_CORS_DOMAIN:-*} \
+          --ws.api=eth,net,web3,txpool \
+          --authrpc.addr=0.0.0.0 \
+          --authrpc.port=8551 \
+          --authrpc.jwtsecret=/workspace/jwt.txt \
+          --authrpc.vhosts=op-geth \
+          --syncmode=full \
+          --gcmode=archive \
+          --rollup.disabletxpoolgossip=true \
+          --metrics \
+          --metrics.addr=0.0.0.0 \
+          --metrics.port=6060
+    healthcheck:
+      test: ["CMD", "wget", "--header=Host: testrpc.xhaviscan.com", "--quiet", "--tries=1", "--timeout=10", "--output-document=-", "http://localhost:8545"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ============================================================
+  # op-node: L2 consensus / sequencer
+  # P2P port (9222) is published. Admin RPC (8547) is NOT published.
+  # ============================================================
+  op-node:
+    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-node:v1.16.4
+    container_name: op-node
+    restart: unless-stopped
+    networks:
+      - l2-internal
+    volumes:
+      - ./sequencer:/workspace
+      - op_geth_data:/workspace/op-geth-data
+    working_dir: /workspace
+    env_file:
+      - .env
+    environment:
+      - OP_NODE_P2P_SEQUENCER_KEY=${SEQUENCER_PRIVATE_KEY}
+    ports:
+      - "9222:9222"   # P2P discovery and block gossip
+      # Port 8547 (op-node admin RPC) intentionally NOT published
+    command: >
+      op-node
+      --l1=${L1_RPC_URL}
+      --l1.beacon=${L1_BEACON_URL}
+      --l2=http://op-geth:8551
+      --l2.jwt-secret=/workspace/jwt.txt
+      --rollup.config=/workspace/rollup.json
+      --sequencer.enabled=true
+      --sequencer.stopped=false
+      --sequencer.max-safe-lag=600
+      --verifier.l1-confs=4
+      --p2p.advertise.ip=${P2P_ADVERTISE_IP}
+      --p2p.listen.ip=0.0.0.0
+      --p2p.listen.tcp=9222
+      --p2p.listen.udp=9222
+      --rpc.addr=0.0.0.0
+      --rpc.port=8547
+      --rpc.enable-admin
+      --safedb.path=/workspace/op-node-safedb
+      --metrics.enabled
+      --metrics.addr=0.0.0.0
+      --metrics.port=7301
+      --log.level=info
+      --log.format=json
+    depends_on:
+      op-geth:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--post-data={\"jsonrpc\":\"2.0\",\"method\":\"optimism_syncStatus\",\"params\":[],\"id\":1}", "--header=Content-Type: application/json", "--quiet", "--tries=1", "--timeout=10", "--output-document=-", "http://localhost:8547"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+  # ============================================================
+  # op-batcher: submits L2 tx batches to L1
+  # Admin RPC bound to 127.0.0.1 (container-local only)
+  # Uses EIP-4844 blobs (cheaper than calldata post-Cancun)
+  # ============================================================
+  batcher:
+    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-batcher:v1.16.3
+    container_name: op-batcher
+    restart: unless-stopped
+    networks:
+      - l2-internal
+    volumes:
+      - ./batcher:/workspace
+    working_dir: /workspace
+    env_file:
+      - ./batcher/.env
+      - .env
+    environment:
+      - OP_BATCHER_L1_ETH_RPC=${L1_RPC_URL}
+      - OP_BATCHER_PRIVATE_KEY=${BATCHER_PRIVATE_KEY}
+    command: >
+      op-batcher
+      --rpc.addr=127.0.0.1
+      --rpc.port=8548
+      --rpc.enable-admin
+      --max-channel-duration=2
+      --data-availability-type=blobs
+      --resubmission-timeout=30s
+      --txmgr.send-timeout=2m
+      --compression-algo=brotli
+      --metrics.enabled
+      --metrics.addr=0.0.0.0
+      --metrics.port=7302
+      --log.level=info
+      --log.format=json
+    depends_on:
+      op-node:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--timeout=10", "--output-document=-", "http://localhost:7302/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================================
+  # op-proposer: submits L2 output roots to L1 dispute game
+  # Admin RPC bound to 127.0.0.1. allow-non-finalized removed for safety.
+  # ============================================================
+  proposer:
+    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-proposer:v1.10.0
+    container_name: op-proposer
+    restart: unless-stopped
+    networks:
+      - l2-internal
+    volumes:
+      - ./proposer:/workspace
+    working_dir: /workspace
+    env_file:
+      - ./proposer/.env
+      - .env
+    environment:
+      - OP_PROPOSER_L1_ETH_RPC=${L1_RPC_URL}
+      - OP_PROPOSER_PRIVATE_KEY=${PROPOSER_PRIVATE_KEY}
+    command: >
+      op-proposer
+      --rpc.addr=127.0.0.1
+      --rpc.port=8560
+      --rollup-rpc=http://op-node:8547
+      --wait-node-sync=true
+      --metrics.enabled
+      --metrics.addr=0.0.0.0
+      --metrics.port=7303
+      --log.level=info
+      --log.format=json
+    depends_on:
+      op-node:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--timeout=10", "--output-document=-", "http://localhost:7303/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================================
+  # op-challenger: monitors and challenges invalid output roots
+  # ============================================================
+  challenger:
+    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-challenger:v1.7.0
+    container_name: op-challenger
+    restart: unless-stopped
+    networks:
+      - l2-internal
+    volumes:
+      - ./challenger:/workspace
+    working_dir: /workspace
+    env_file:
+      - ./challenger/.env
+      - .env
+    environment:
+      - OP_CHALLENGER_L1_ETH_RPC=${L1_RPC_URL}
+      - OP_CHALLENGER_L1_BEACON=${L1_BEACON_URL}
+      - OP_CHALLENGER_PRIVATE_KEY=${CHALLENGER_PRIVATE_KEY}
+    command: >
+      op-challenger run-trace
+      --trace-type=permissioned,cannon
+      --cannon-l2-genesis=/workspace/genesis.json
+      --cannon-rollup-config=/workspace/rollup.json
+      --l2-eth-rpc=http://op-geth:8545
+      --rollup-rpc=http://op-node:8547
+      --datadir=/workspace/data
+      --metrics.enabled
+      --metrics.addr=0.0.0.0
+      --metrics.port=7304
+      --log.level=info
+      --log.format=json
+    depends_on:
+      op-node:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "</dev/tcp/localhost/7304"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ============================================================
+  # dispute-mon: tracks dispute game health
+  # Metrics port (7300) NOT published externally — scrape from your monitoring stack
+  # OP_DISPUTE_MON_NETWORK removed — not applicable to custom chain 16585
+  # ============================================================
+  dispute-mon:
+    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-dispute-mon:v1.4.2-rc.1
+    container_name: dispute-mon
+    restart: unless-stopped
+    networks:
+      - l2-internal
+    volumes:
+      - ./dispute-mon:/workspace
+    working_dir: /workspace
+    env_file:
+      - ./dispute-mon/.env
+      - .env
+    environment:
+      - OP_DISPUTE_MON_L1_ETH_RPC=${L1_RPC_URL}
+      - OP_DISPUTE_MON_ROLLUP_RPC=http://op-node:8547
+      - OP_DISPUTE_MON_MONITOR_INTERVAL=10s
+      - OP_DISPUTE_MON_LOG_LEVEL=info
+      - OP_DISPUTE_MON_LOG_FORMAT=json
+      - OP_DISPUTE_MON_METRICS_ADDR=0.0.0.0
+      - OP_DISPUTE_MON_METRICS_ENABLED=true
+      - OP_DISPUTE_MON_METRICS_PORT=7300
+    depends_on:
+      op-node:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--timeout=10", "--output-document=-", "http://localhost:7300/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  l2-internal:
+    driver: bridge
+
+volumes:
+  op_geth_data:

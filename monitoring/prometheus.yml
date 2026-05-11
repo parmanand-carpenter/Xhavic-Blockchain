@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'op-geth'
+    static_configs:
+      - targets: ['op-geth:6060']
+    metrics_path: /debug/metrics/prometheus
+
+  - job_name: 'op-node'
+    static_configs:
+      - targets: ['op-node:7301']
+
+  - job_name: 'op-batcher'
+    static_configs:
+      - targets: ['op-batcher:7302']
+
+  - job_name: 'op-proposer'
+    static_configs:
+      - targets: ['op-proposer:7303']
+
+  - job_name: 'op-challenger'
+    static_configs:
+      - targets: ['op-challenger:7304']
+
+  - job_name: 'dispute-mon'
+    static_configs:
+      - targets: ['dispute-mon:7300']

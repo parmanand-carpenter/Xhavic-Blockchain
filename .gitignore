@@ -1,0 +1,57 @@
+# ============================================================
+# SECRETS — never commit these
+# ============================================================
+# All .env files contain private keys
+.env
+.env.local
+**/.env
+
+# JWT secret and P2P private key
+**/jwt.txt
+**/opnode_p2p_priv.txt
+
+# ============================================================
+# RUNTIME DATA — large / generated at startup
+# ============================================================
+**/op-geth-data/
+**/op-node-safedb/
+**/opnode_discovery_db/
+**/opnode_peerstore_db/
+challenger/data/
+dispute-mon/logs/
+
+# Cannon prestate binary (large binary, not needed for audit)
+challenger/*.bin.gz
+
+# Batcher/proposer transaction state (runtime)
+batcher/state.json
+proposer/state.json
+
+# ============================================================
+# TOOLING
+# ============================================================
+# Optimism monorepo (too large)
+optimism/
+
+# Downloaded binary
+op-deployer
+
+# ============================================================
+# MISC
+# ============================================================
+*.log
+logs/
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+node_modules/
+tmp/
+temp/
