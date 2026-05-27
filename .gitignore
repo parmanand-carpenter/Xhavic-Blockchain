@@ -28,6 +28,17 @@ batcher/state.json
 proposer/state.json
 
 # ============================================================
+# DEPLOYMENT STATE — sensitive infrastructure files
+# ============================================================
+deployer/.deployer/state.json
+deployer/.deployer/genesis.json
+deployer/.deployer/intent.toml
+deployer/.deployer/rollup.json
+deployer/.deployer/intent.toml.bak
+sequencer/genesis.json
+sequencer/rollup.json
+
+# ============================================================
 # TOOLING
 # ============================================================
 # Optimism monorepo (too large)
