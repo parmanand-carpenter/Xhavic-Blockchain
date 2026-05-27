@@ -27,6 +27,20 @@
 | Currency Symbol | `ETH` |
 | Block Explorer URL | `https://xhaviscan.com` |
 
+### Quick Connect (no local node needed)
+
+```bash
+# Test public RPC — get current block number
+curl -s -X POST https://testrpc.xhaviscan.com \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq
+
+# Confirm Chain ID (should return 0x40c9 = 16585)
+curl -s -X POST https://testrpc.xhaviscan.com \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' | jq
+```
+
 ---
 
 ## Architecture
