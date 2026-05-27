@@ -341,15 +341,17 @@ This deployment has been reviewed against the **QuillAudits OP Stack Security Ch
 | 02 | Critical | admin/debug namespaces + wildcard CORS | Fixed |
 | 03 | Critical | op-node admin RPC (port 8547) exposed | Fixed |
 | 04 | High | Private keys in CLI arguments | Fixed |
-| 05 | High | Permissionless fault proofs (Stage 1) | Planned upgrade |
+| 05 | High | Permissionless fault proofs (Stage 1) | Stage 0 — permissioned (see note below) |
 | 06 | High | P2P eclipse / admin_removePeer | Fixed |
 | 07 | Low | minBaseFee = 0 | Fixed |
 | 08 | Medium | `--allow-non-finalized` in proposer | Fixed |
 | 09 | Medium | `sequencer.max-safe-lag` too high | Fixed |
 
+> **Stage 0 — Permissioned Fault Proofs:** Xhavic Blockchain currently operates at Stage 0. Dispute games are permissioned — only the designated Challenger role (`0x15426fb64a89BbD556FEC850fFe180a40bBa2814`) can submit and resolve challenges. Public/permissionless fault proofs (Stage 1) are not yet active. Users should be aware that fraud proof verification is not fully trustless at this stage.
+
 **Key security measures in place:**
 - Engine API (8551) never published — internal Docker network only
-- RPC exposes only `eth, net, web3, txpool, miner` — no `admin`, `debug`, or `personal`
+- RPC exposes only `eth, net, web3` — no `admin`, `debug`, `txpool`, `miner`, or `personal`
 - All private keys loaded via environment variables, never passed as CLI flags
 - JWT rotated and secured with `chmod 600`
 - CORS locked to `https://xhaviscan.com`
