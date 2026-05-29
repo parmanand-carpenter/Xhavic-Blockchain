@@ -58,6 +58,11 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
 
   # ============================================================
   # op-node: L2 consensus / sequencer
@@ -113,6 +118,11 @@ services:
       timeout: 10s
       retries: 5
       start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
 
   # ============================================================
   # op-batcher: submits L2 tx batches to L1
@@ -158,6 +168,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
 
   # ============================================================
   # op-proposer: submits L2 output roots to L1 dispute game
@@ -198,6 +213,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
 
   # ============================================================
   # op-challenger: monitors and challenges invalid output roots
@@ -240,6 +260,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
 
   # ============================================================
   # dispute-mon: tracks dispute game health
@@ -276,6 +301,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
 
 networks:
   l2-internal:
