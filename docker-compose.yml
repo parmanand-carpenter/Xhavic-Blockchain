@@ -36,12 +36,12 @@ services:
           --http.port=8545 \
           --http.vhosts=${HTTP_VHOSTS:-*} \
           --http.corsdomain=${RPC_CORS_DOMAIN:-*} \
-          --http.api=eth,net,web3,txpool,miner \
+          --http.api=eth,net,web3 \
           --ws \
           --ws.addr=0.0.0.0 \
           --ws.port=8546 \
           --ws.origins=${RPC_CORS_DOMAIN:-*} \
-          --ws.api=eth,net,web3,txpool \
+          --ws.api=eth,net,web3 \
           --authrpc.addr=0.0.0.0 \
           --authrpc.port=8551 \
           --authrpc.jwtsecret=/workspace/jwt.txt \
