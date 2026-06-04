@@ -68,3 +68,4 @@ tmp/
 temp/
 docker-compose.yml.backup
 SERVER_DEPLOYMENT.md
+op-deployer-*.bak

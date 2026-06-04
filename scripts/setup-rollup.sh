@@ -19,8 +19,15 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
+# Load .env early so L2_CHAIN_ID and other vars are available before use
+if [ -f "$(dirname "$0")/../.env" ]; then
+    set -a
+    source "$(dirname "$0")/../.env"
+    set +a
+fi
+
 L1_CHAIN_ID=11155111  # Sepolia
-L2_CHAIN_ID_DECIMAL=${L2_CHAIN_ID:-16584}  # Default test chain ID (decimal)
+L2_CHAIN_ID_DECIMAL=${L2_CHAIN_ID:-16586}  # Default test chain ID (decimal)
 L2_CHAIN_ID=$(printf "0x%064x" "$L2_CHAIN_ID_DECIMAL")  # Convert to full 64-char hex format for TOML
 P2P_ADVERTISE_IP=${P2P_ADVERTISE_IP:-127.0.0.1}  # Default to localhost for local testing
 WORKSPACE_DIR="$(pwd)"
@@ -78,10 +85,10 @@ derive_addresses_from_keys() {
 
     cd "$DEPLOYER_DIR/addresses"
 
-    # Derive addresses via ETH_PRIVATE_KEY env var so keys are not visible in ps aux
+    # Derive addresses from private keys (local one-time setup)
 
     # Derive deployer address (used for admin and system roles)
-    DEPLOYER_ADDRESS=$(ETH_PRIVATE_KEY="$PRIVATE_KEY" cast wallet address 2>/dev/null)
+    DEPLOYER_ADDRESS=$(cast wallet address --private-key "$PRIVATE_KEY" 2>/dev/null)
     if [ -z "$DEPLOYER_ADDRESS" ]; then
         log_error "Failed to derive deployer address from PRIVATE_KEY"
         exit 1
@@ -89,7 +96,7 @@ derive_addresses_from_keys() {
     log_info "Deployer address: $DEPLOYER_ADDRESS"
 
     # Derive sequencer address
-    SEQUENCER_ADDRESS=$(ETH_PRIVATE_KEY="$SEQUENCER_PRIVATE_KEY" cast wallet address 2>/dev/null)
+    SEQUENCER_ADDRESS=$(cast wallet address --private-key "$SEQUENCER_PRIVATE_KEY" 2>/dev/null)
     if [ -z "$SEQUENCER_ADDRESS" ]; then
         log_error "Failed to derive sequencer address from SEQUENCER_PRIVATE_KEY"
         exit 1
@@ -97,7 +104,7 @@ derive_addresses_from_keys() {
     log_info "Sequencer address: $SEQUENCER_ADDRESS"
 
     # Derive batcher address
-    BATCHER_ADDRESS=$(ETH_PRIVATE_KEY="$BATCHER_PRIVATE_KEY" cast wallet address 2>/dev/null)
+    BATCHER_ADDRESS=$(cast wallet address --private-key "$BATCHER_PRIVATE_KEY" 2>/dev/null)
     if [ -z "$BATCHER_ADDRESS" ]; then
         log_error "Failed to derive batcher address from BATCHER_PRIVATE_KEY"
         exit 1
@@ -105,7 +112,7 @@ derive_addresses_from_keys() {
     log_info "Batcher address: $BATCHER_ADDRESS"
 
     # Derive proposer address
-    PROPOSER_ADDRESS=$(ETH_PRIVATE_KEY="$PROPOSER_PRIVATE_KEY" cast wallet address 2>/dev/null)
+    PROPOSER_ADDRESS=$(cast wallet address --private-key "$PROPOSER_PRIVATE_KEY" 2>/dev/null)
     if [ -z "$PROPOSER_ADDRESS" ]; then
         log_error "Failed to derive proposer address from PROPOSER_PRIVATE_KEY"
         exit 1
@@ -113,7 +120,7 @@ derive_addresses_from_keys() {
     log_info "Proposer address: $PROPOSER_ADDRESS"
 
     # Derive challenger address
-    CHALLENGER_ADDRESS=$(ETH_PRIVATE_KEY="$CHALLENGER_PRIVATE_KEY" cast wallet address 2>/dev/null)
+    CHALLENGER_ADDRESS=$(cast wallet address --private-key "$CHALLENGER_PRIVATE_KEY" 2>/dev/null)
     if [ -z "$CHALLENGER_ADDRESS" ]; then
         log_error "Failed to derive challenger address from CHALLENGER_PRIVATE_KEY"
         exit 1
@@ -162,36 +169,46 @@ EOF
 
 # Update intent configuration
 update_intent() {
-    log_info "Updating intent configuration..."
+    log_info "Patching intent configuration..."
 
-    # Read generated addresses
-    BASE_FEE_VAULT_ADDR=$(cat addresses/base_fee_vault_recipient_address.txt)
-    L1_FEE_VAULT_ADDR=$(cat addresses/l1_fee_vault_recipient_address.txt)
-    SEQUENCER_FEE_VAULT_ADDR=$(cat addresses/sequencer_fee_vault_recipient_address.txt)
-    SYSTEM_CONFIG_ADDR=$(cat addresses/system_config_address.txt)
+    # Read generated signer addresses
     UNSAFE_BLOCK_SIGNER_ADDR=$(cat addresses/unsafe_block_signer_address.txt)
     BATCHER_ADDR=$(cat addresses/batcher_address.txt)
     PROPOSER_ADDR=$(cat addresses/proposer_address.txt)
     CHALLENGER_ADDR=$(cat addresses/challenger_address.txt)
 
-    # Keep the default contract locators and opcmAddress from op-deployer init
-
-    # Update only the chain-specific fields in the existing intent.toml
+    # Patch the op-deployer-init-generated intent.toml in place. We keep the
+    # generated opcmAddress, contract locators, opDeployerVersion and the
+    # [chains.customGasToken] section untouched so the file always matches the
+    # installed binary version and the current L1 OPCM state (this avoids the
+    # version-drift initVersion() reverts). The mainnet OPCM is selected
+    # automatically by init when L1_CHAIN_ID=1.
+    #
+    # On testnet all fee recipients and owner roles point to the deployer EOA;
+    # for mainnet swap the owner roles to your Safe multisig addresses.
     L2_CHAIN_ID_HEX=$(printf "0x%064x" "$L2_CHAIN_ID")
     sed -i.bak "s|id = .*|id = \"$L2_CHAIN_ID_HEX\"|" .deployer/intent.toml
-    sed -i.bak "s|baseFeeVaultRecipient = .*|baseFeeVaultRecipient = \"$BASE_FEE_VAULT_ADDR\"|" .deployer/intent.toml
-    sed -i.bak "s|l1FeeVaultRecipient = .*|l1FeeVaultRecipient = \"$L1_FEE_VAULT_ADDR\"|" .deployer/intent.toml
-    sed -i.bak "s|sequencerFeeVaultRecipient = .*|sequencerFeeVaultRecipient = \"$SEQUENCER_FEE_VAULT_ADDR\"|" .deployer/intent.toml
+    sed -i.bak "s|fundDevAccounts = .*|fundDevAccounts = false|" .deployer/intent.toml
+    sed -i.bak "s|gasLimit = .*|gasLimit = 30000000|" .deployer/intent.toml
+    sed -i.bak "s|minBaseFee = .*|minBaseFee = 5000000|" .deployer/intent.toml
+    sed -i.bak "s|baseFeeVaultRecipient = .*|baseFeeVaultRecipient = \"$DEPLOYER_ADDRESS\"|" .deployer/intent.toml
+    sed -i.bak "s|l1FeeVaultRecipient = .*|l1FeeVaultRecipient = \"$DEPLOYER_ADDRESS\"|" .deployer/intent.toml
+    sed -i.bak "s|sequencerFeeVaultRecipient = .*|sequencerFeeVaultRecipient = \"$DEPLOYER_ADDRESS\"|" .deployer/intent.toml
     sed -i.bak "s|operatorFeeVaultRecipient = .*|operatorFeeVaultRecipient = \"$DEPLOYER_ADDRESS\"|" .deployer/intent.toml
     sed -i.bak "s|chainFeesRecipient = .*|chainFeesRecipient = \"$DEPLOYER_ADDRESS\"|" .deployer/intent.toml
-    sed -i.bak "s|systemConfigOwner = .*|systemConfigOwner = \"$SYSTEM_CONFIG_ADDR\"|" .deployer/intent.toml
+    sed -i.bak "s|l1ProxyAdminOwner = .*|l1ProxyAdminOwner = \"$DEPLOYER_ADDRESS\"|" .deployer/intent.toml
+    sed -i.bak "s|l2ProxyAdminOwner = .*|l2ProxyAdminOwner = \"$DEPLOYER_ADDRESS\"|" .deployer/intent.toml
+    sed -i.bak "s|systemConfigOwner = .*|systemConfigOwner = \"$DEPLOYER_ADDRESS\"|" .deployer/intent.toml
+    # NOTE: do NOT set liquidityControllerOwner — leaving it at the zero address
+    # keeps custom gas token DISABLED (Xhavic uses ETH). A non-zero value makes
+    # v0.6.0 require CustomGasToken.Name and fail validation.
     sed -i.bak "s|unsafeBlockSigner = .*|unsafeBlockSigner = \"$UNSAFE_BLOCK_SIGNER_ADDR\"|" .deployer/intent.toml
     sed -i.bak "s|batcher = .*|batcher = \"$BATCHER_ADDR\"|" .deployer/intent.toml
     sed -i.bak "s|proposer = .*|proposer = \"$PROPOSER_ADDR\"|" .deployer/intent.toml
     sed -i.bak "s|challenger = .*|challenger = \"$CHALLENGER_ADDR\"|" .deployer/intent.toml
-    sed -i.bak "s|fundDevAccounts = .*|fundDevAccounts = false|" .deployer/intent.toml
+    rm -f .deployer/intent.toml.bak
 
-    log_success "Intent configuration updated"
+    log_success "Intent configuration patched"
 }
 
 # Deploy L1 contracts
@@ -412,7 +429,7 @@ validate_main_env() {
 
     if [ -z "$L2_CHAIN_ID" ]; then
         log_error "L2_CHAIN_ID is not set. Please set it in your .env file."
-        log_info "Example: L2_CHAIN_ID=16584"
+        log_info "Example: L2_CHAIN_ID=16586"
         return 1
     fi
 

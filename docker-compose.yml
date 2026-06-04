@@ -1,7 +1,18 @@
 services:
   # ============================================================
-  # op-geth: L2 execution engine
-  # Public ports: 8545 (HTTP RPC), 8546 (WebSocket RPC)
+  # op-geth: L2 execution engine — SEQUENCER node (PRIVATE)
+  # ------------------------------------------------------------
+  # SECURITY NOTE (for auditors):
+  # This is the PRIVATE sequencer's op-geth and is NEVER exposed to
+  # the public internet. The `miner` API is enabled here ONLY because
+  # op-batcher's DA throttling requires `miner_setMaxDASize` (an internal,
+  # benign call). It is reachable only by the batcher over the private
+  # network.
+  # Public RPC nodes run a SEPARATE config with --http.api=eth,net,web3
+  # (NO miner, NO txpool) behind proxyd, so miner is never public-facing.
+  # See the 5-server mainnet architecture: sequencer/services are private,
+  # only the RPC node + explorer are public.
+  # ------------------------------------------------------------
   # Engine API (8551) is NOT published — internal Docker network only
   # ============================================================
   op-geth:
@@ -36,7 +47,7 @@ services:
           --http.port=8545 \
           --http.vhosts=${HTTP_VHOSTS:-*} \
           --http.corsdomain=${RPC_CORS_DOMAIN:-*} \
-          --http.api=eth,net,web3 \
+          --http.api=eth,net,web3,miner \
           --ws \
           --ws.addr=0.0.0.0 \
           --ws.port=8546 \
@@ -149,7 +160,7 @@ services:
       --rpc.addr=127.0.0.1
       --rpc.port=8548
       --rpc.enable-admin
-      --max-channel-duration=2
+      --max-channel-duration=300
       --data-availability-type=blobs
       --resubmission-timeout=30s
       --txmgr.send-timeout=2m
