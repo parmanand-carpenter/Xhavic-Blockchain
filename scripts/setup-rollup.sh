@@ -246,6 +246,20 @@ setup_sequencer() {
     mkdir -p "$SEQUENCER_DIR"
     cd "$SEQUENCER_DIR"
 
+    # Remove stale op-node databases from any previous chain. These are
+    # bind-mounted (not in the op-geth Docker volume), so they survive a
+    # volume wipe and would otherwise leak a previous chain's safe-head
+    # history into the fresh chain — which makes op-challenger try to
+    # dispute non-existent L2 blocks (e.g. block 311026 from an old chain).
+    # op-node creates these as root, so remove them via a root container
+    # (a plain `rm` run by the host user would hit permission denied).
+    log_info "Cleaning stale op-node databases (safedb / discovery / peerstore)..."
+    if [ -d op-node-safedb ] || [ -d opnode_discovery_db ] || [ -d opnode_peerstore_db ]; then
+        docker run --rm -v "$SEQUENCER_DIR":/seq alpine \
+            sh -c "rm -rf /seq/op-node-safedb /seq/opnode_discovery_db /seq/opnode_peerstore_db" \
+            2>/dev/null || rm -rf op-node-safedb opnode_discovery_db opnode_peerstore_db
+    fi
+
     # Copy configuration files
     cp "$DEPLOYER_DIR/.deployer/genesis.json" .
     cp "$DEPLOYER_DIR/.deployer/rollup.json" .
@@ -281,8 +295,8 @@ setup_batcher() {
     # Create .env file with OP_BATCHER prefixed variables using batcher private key
     # Use production-ready settings from main .env or defaults
     POLL_INTERVAL=${OP_BATCHER_POLL_INTERVAL:-1s}
-    SUB_SAFETY_MARGIN=${OP_BATCHER_SUB_SAFETY_MARGIN:-10}
-    NUM_CONFIRMATIONS=${OP_BATCHER_NUM_CONFIRMATIONS:-4}
+    SUB_SAFETY_MARGIN=${OP_BATCHER_SUB_SAFETY_MARGIN:-300}
+    NUM_CONFIRMATIONS=${OP_BATCHER_NUM_CONFIRMATIONS:-10}
     SAFE_ABORT_COUNT=${OP_BATCHER_SAFE_ABORT_NONCE_TOO_LOW_COUNT:-3}
 
     cat > .env << EOF
@@ -315,8 +329,11 @@ setup_proposer() {
     # Create .env file with OP_PROPOSER prefixed variables using proposer private key
     # Use production-ready settings from main .env or defaults
     PROPOSER_POLL_INTERVAL=${OP_PROPOSER_POLL_INTERVAL:-12s}
-    PROPOSER_GAME_TYPE=${OP_PROPOSER_GAME_TYPE:-0}
-    PROPOSER_PROPOSAL_INTERVAL=${OP_PROPOSER_PROPOSAL_INTERVAL:-1800s}
+    # Stage 0 (permissioned) chain → PermissionedDisputeGame = game type 1.
+    # Must match the game type registered on the DisputeGameFactory, else
+    # the proposer cannot create games and the chain never finalizes.
+    PROPOSER_GAME_TYPE=${OP_PROPOSER_GAME_TYPE:-1}
+    PROPOSER_PROPOSAL_INTERVAL=${OP_PROPOSER_PROPOSAL_INTERVAL:-5h}
 
     cat > .env << EOF
 OP_PROPOSER_GAME_FACTORY_ADDRESS=$GAME_FACTORY_ADDR

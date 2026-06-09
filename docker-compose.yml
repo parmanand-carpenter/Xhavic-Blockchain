@@ -4,19 +4,20 @@ services:
   # ------------------------------------------------------------
   # SECURITY NOTE (for auditors):
   # This is the PRIVATE sequencer's op-geth and is NEVER exposed to
-  # the public internet. The `miner` API is enabled here ONLY because
-  # op-batcher's DA throttling requires `miner_setMaxDASize` (an internal,
-  # benign call). It is reachable only by the batcher over the private
-  # network.
+  # the public internet. `miner` + `debug` APIs are enabled here ONLY for
+  # internal services over the private network:
+  #   - miner : op-batcher DA throttling (miner_setMaxDASize)
+  #   - debug : op-challenger cannon trace execution (L2 witnesses)
+  # Both are reachable only by the batcher/challenger internally.
   # Public RPC nodes run a SEPARATE config with --http.api=eth,net,web3
-  # (NO miner, NO txpool) behind proxyd, so miner is never public-facing.
+  # (NO miner, NO debug, NO txpool) behind proxyd, so these are never public.
   # See the 5-server mainnet architecture: sequencer/services are private,
   # only the RPC node + explorer are public.
   # ------------------------------------------------------------
   # Engine API (8551) is NOT published — internal Docker network only
   # ============================================================
   op-geth:
-    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-geth:v1.101604.0
+    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-geth:v1.101702.2
     container_name: op-geth
     restart: unless-stopped
     networks:
@@ -47,7 +48,7 @@ services:
           --http.port=8545 \
           --http.vhosts=${HTTP_VHOSTS:-*} \
           --http.corsdomain=${RPC_CORS_DOMAIN:-*} \
-          --http.api=eth,net,web3,miner \
+          --http.api=eth,net,web3,miner,debug \
           --ws \
           --ws.addr=0.0.0.0 \
           --ws.port=8546 \
@@ -80,7 +81,7 @@ services:
   # P2P port (9222) is published. Admin RPC (8547) is NOT published.
   # ============================================================
   op-node:
-    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-node:v1.16.4
+    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-node:v1.19.0
     container_name: op-node
     restart: unless-stopped
     networks:
@@ -123,12 +124,8 @@ services:
     depends_on:
       op-geth:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--post-data={\"jsonrpc\":\"2.0\",\"method\":\"optimism_syncStatus\",\"params\":[],\"id\":1}", "--header=Content-Type: application/json", "--quiet", "--tries=1", "--timeout=10", "--output-document=-", "http://localhost:8547"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 10s
+    # NOTE: op-node v1.19.0+ images are DISTROLESS (no wget/sh), so a wget
+    # healthcheck cannot run. Health is monitored via Prometheus on :7301.
     logging:
       driver: "json-file"
       options:
@@ -139,9 +136,12 @@ services:
   # op-batcher: submits L2 tx batches to L1
   # Admin RPC bound to 127.0.0.1 (container-local only)
   # Uses EIP-4844 blobs (cheaper than calldata post-Cancun)
+  # --max-channel-duration=300 (1 hour) is the mainnet value: a batch is posted
+  #   at least every ~1h (or sooner when a channel fills). For fast LOCAL testing
+  #   you can temporarily drop it to 5 (~1 min) to make the safe head advance.
   # ============================================================
   batcher:
-    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-batcher:v1.16.3
+    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-batcher:v1.16.9
     container_name: op-batcher
     restart: unless-stopped
     networks:
@@ -161,10 +161,12 @@ services:
       --rpc.port=8548
       --rpc.enable-admin
       --max-channel-duration=300
-      --data-availability-type=blobs
-      --resubmission-timeout=30s
+      --data-availability-type=auto
+      --batch-type=1
+      --max-pending-tx=10
+      --resubmission-timeout=180s
       --txmgr.send-timeout=2m
-      --compression-algo=brotli
+      --compression-algo=brotli-10
       --metrics.enabled
       --metrics.addr=0.0.0.0
       --metrics.port=7302
@@ -172,13 +174,8 @@ services:
       --log.format=json
     depends_on:
       op-node:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--timeout=10", "--output-document=-", "http://localhost:7302/metrics"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+        condition: service_started
+    # distroless image (no wget) — monitored via Prometheus on :7302
     logging:
       driver: "json-file"
       options:
@@ -190,7 +187,7 @@ services:
   # Admin RPC bound to 127.0.0.1. allow-non-finalized removed for safety.
   # ============================================================
   proposer:
-    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-proposer:v1.10.0
+    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-proposer:v1.16.3
     container_name: op-proposer
     restart: unless-stopped
     networks:
@@ -217,13 +214,8 @@ services:
       --log.format=json
     depends_on:
       op-node:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--timeout=10", "--output-document=-", "http://localhost:7303/metrics"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+        condition: service_started
+    # distroless image (no wget) — monitored via Prometheus on :7303
     logging:
       driver: "json-file"
       options:
@@ -234,7 +226,7 @@ services:
   # op-challenger: monitors and challenges invalid output roots
   # ============================================================
   challenger:
-    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-challenger:v1.7.0
+    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-challenger:v1.9.3
     container_name: op-challenger
     restart: unless-stopped
     networks:
@@ -250,8 +242,8 @@ services:
       - OP_CHALLENGER_L1_BEACON=${L1_BEACON_URL}
       - OP_CHALLENGER_PRIVATE_KEY=${CHALLENGER_PRIVATE_KEY}
     command: >
-      op-challenger run-trace
-      --trace-type=permissioned,cannon
+      op-challenger
+      --trace-type=permissioned
       --cannon-l2-genesis=/workspace/genesis.json
       --cannon-rollup-config=/workspace/rollup.json
       --l2-eth-rpc=http://op-geth:8545
@@ -264,13 +256,8 @@ services:
       --log.format=json
     depends_on:
       op-node:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "bash", "-c", "</dev/tcp/localhost/7304"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
+        condition: service_started
+    # distroless image (no bash/wget) — monitored via Prometheus on :7304
     logging:
       driver: "json-file"
       options:
@@ -280,10 +267,10 @@ services:
   # ============================================================
   # dispute-mon: tracks dispute game health
   # Metrics port (7300) NOT published externally — scrape from your monitoring stack
-  # OP_DISPUTE_MON_NETWORK removed — not applicable to custom chain 16585
+  # OP_DISPUTE_MON_NETWORK removed — not applicable to custom chain 16586
   # ============================================================
   dispute-mon:
-    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-dispute-mon:v1.4.2-rc.1
+    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-dispute-mon:v1.5.2
     container_name: dispute-mon
     restart: unless-stopped
     networks:
@@ -305,13 +292,8 @@ services:
       - OP_DISPUTE_MON_METRICS_PORT=7300
     depends_on:
       op-node:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--timeout=10", "--output-document=-", "http://localhost:7300/metrics"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+        condition: service_started
+    # distroless image (no wget) — monitored via Prometheus on :7300
     logging:
       driver: "json-file"
       options:
